@@ -1,0 +1,36 @@
+# ── Dependencies / build output ──────────────────────────────────────────────
+node_modules/
+dist/
+dist-web/
+*.log
+.DS_Store
+
+# ── Third-party copyrighted content — NOT published to this public repo ───────
+# Regenerate locally with `npm run bootstrap` (downloads the SWF from Newgrounds
+# and re-runs the FFDec export + data extraction + atlas build). See README.
+# NOTE: gitignore does not support inline comments — keep patterns on their own line.
+
+# original game SWF (freely downloadable from Newgrounds 668706) + harness SWFs
+*.swf
+mspaintracer.swf
+
+# full FFDec decompile (third-party AS3 + game-data XML)
+extracted/
+
+# game-content JSON derived from the SWF
+data/
+
+# JPEXS FFDec tool (24 MB; re-download via bootstrap)
+tools/ffdec/
+
+# generated harness SWFs
+tools/oracle/build/
+
+# exported sprite/image PNGs (third-party game art, 35 MB)
+tools/atlas/work/
+
+# packed atlas (atlas.png/json — third-party game art)
+src/render/assets/
+
+# generated web assets
+public/assets/

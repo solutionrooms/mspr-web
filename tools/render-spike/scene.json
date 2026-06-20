@@ -1,0 +1,31 @@
+{
+  "stage": { "w": 640, "h": 480 },
+  "bg": [54, 62, 78],
+  "note": "Shared spike scene consumed by BOTH the WebGL2 compositor (spike-main.ts) and the Flash/Ruffle reference harness (harness-spike.as), from the SAME atlas (src/render/assets). Proves: anchor/ortho, rot+scale+xflip, full ColorTransform, additive blend.",
+  "sprites": [
+    {
+      "name": "car (rot+scale+xflip+ColorTransform, normal blend)",
+      "clip": "Cars",
+      "frame": 0,
+      "x": 330,
+      "y": 250,
+      "scale": 1.6,
+      "dirDeg": 20,
+      "xflip": true,
+      "blend": "normal",
+      "ct": { "rm": 1.2, "gm": 0.8, "bm": 0.8, "am": 1.0, "ro": 30, "go": 0, "bo": 0, "ao": 0 }
+    },
+    {
+      "name": "nitro particle (additive blend, no ColorTransform)",
+      "clip": "fx_nitro",
+      "frame": 2,
+      "x": 210,
+      "y": 250,
+      "scale": 1.5,
+      "dirDeg": 0,
+      "xflip": false,
+      "blend": "add",
+      "ct": null
+    }
+  ]
+}

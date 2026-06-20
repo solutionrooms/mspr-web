@@ -1,0 +1,31 @@
+{
+  "name": "mspr-port",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Bit-exact TypeScript port of MS Paint Racers (Box2DFlash 2.0.2 engine + software-faithful WebGL renderer), with the golden-trace oracle rig.",
+  "type": "module",
+  "scripts": {
+    "bootstrap": "bash tools/bootstrap.sh",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "box2d:sync": "node tools/sync-box2d.mjs",
+    "box2d:check": "node tools/sync-box2d.mjs --check",
+    "extract:data": "python3 tools/extract_data.py",
+    "atlas:ffdec": "node tools/atlas/ffdec-export.mjs",
+    "atlas:build": "node tools/atlas/build-atlas.mjs",
+    "oracle:build:freefall": "node tools/oracle/build-harness.mjs tools/oracle/harness-freefall.as",
+    "oracle:capture:freefall": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-freefall.swf test/goldens/m0-m1-freefall.json --done DONE",
+    "dev": "vite",
+    "build:web": "vite build"
+  },
+  "devDependencies": {
+    "@ruffle-rs/ruffle": "^0.3.0",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "puppeteer": "^23.11.1",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.9"
+  }
+}
