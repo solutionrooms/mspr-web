@@ -39,10 +39,11 @@
   <span class="live"><span class="blip"></span>ENGINE RUNNING</span>
   <div id="hud">engine: starting…</div>
   <p class="note">
-    Those shapes are driven by the <strong>real ported Box2DFlash&nbsp;2.0.2 engine</strong>
-    (<code>src/box2d</code>) — the same integrator the golden <code>hex16</code> tests prove matches
-    the original to the bit. Collision/solver/joints + the renderer are in progress; this is the
-    freefall + rotation path (milestones&nbsp;m0–m1), so the art is placeholder, the physics is real.
+    Those boxes are driven by the <strong>real ported Box2DFlash&nbsp;2.0.2 engine</strong>
+    (<code>src/box2d</code>) — now running the <strong>m4 sequential-impulse solver</strong>, so they
+    fall, collide and <strong>stack</strong> with real friction + restitution. Every step matches the
+    original to the bit (golden <code>hex16</code> tests). Joints (cars) + the pseudo-3D road renderer
+    are next; the shapes here are placeholder, the physics is real.
   </p>
   <div class="links">
     <a href="https://github.com/solutionrooms/mspr-web">GitHub repo</a>

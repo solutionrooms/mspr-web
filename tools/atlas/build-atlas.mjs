@@ -159,6 +159,15 @@ const atlas = {
     pageW: pageSize, pageH: pageSize, gutter: GUTTER,
     note: "key = SWF clip/linkage name; pivot is bitmap-local px that maps to RenderObj (x,y). " +
           "cars pivot = caroffsets; others = content-centre (spike).",
+    caveats: [
+      "LOSSLESS art (cars = DefineBitsLossless) reproduces near-exactly vs Ruffle " +
+        "(diff = edge AA only).",
+      "LOSSY art (particles like fx_nitro = DefineShape -> DefineBitsJPEG3) is JPEG-decoded " +
+        "by FFDec here and by Ruffle at runtime with DIFFERENT decoders, so atlas pixels are " +
+        "NOT bit-identical to Ruffle for JPEG clips; additive blend amplifies it. This is an " +
+        "asset-decode caveat, NOT a compositor bug (rendering is not Prime-Directive-gated). " +
+        "See tools/render-spike/README.md.",
+    ],
   },
   clips: Object.fromEntries(
     Object.entries(clips).map(([clip, frames]) => [

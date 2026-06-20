@@ -1,14 +1,17 @@
 // Port of Box2D/Dynamics/b2Island.as (Box2DFlash 2.0.2), line-by-line.
 // Solve() is the integrator + the 2.0.x inline-Baumgarte iteration model and the
-// island sleep logic — the freefall hot path. Op order preserved exactly.
+// island sleep logic. Report() emits contact results to the listener. Op order preserved.
 //
-// Report()'s contact-result emission and SolveTOI()'s sub-step solve reference the
-// narrowphase/solver types; with zero contacts those bodies never run. They are
-// fully ported when the solver lands (m4) — guarded `notPorted` until then.
+// SolveTOI()'s sub-step solve is ported at m7 (CCD/TOI) — guarded `notPorted` until then.
 import { b2Math } from "../Common/Math/b2Math";
 import { b2Settings } from "../Common/b2Settings";
 import { b2Body } from "./b2Body";
 import { b2ContactSolver } from "./Contacts/b2ContactSolver";
+import { b2ContactResult } from "./Contacts/b2ContactResult";
+import type { b2ContactConstraint } from "./Contacts/b2ContactConstraint";
+import type { b2ContactConstraintPoint } from "./Contacts/b2ContactConstraintPoint";
+import type { b2Manifold } from "../Collision/b2Manifold";
+import type { b2ManifoldPoint } from "../Collision/b2ManifoldPoint";
 import type { b2TimeStep } from "./b2TimeStep";
 import type { b2Vec2 } from "../Common/Math/b2Vec2";
 import type { b2Contact } from "./Contacts/b2Contact";
@@ -17,6 +20,9 @@ import type { b2ContactListener } from "./b2ContactListener";
 import { notPorted } from "../_internal/notPorted";
 
 export class b2Island {
+  // b2Island.as:12
+  private static s_reportCR: b2ContactResult = new b2ContactResult();
+
   public m_allocator: unknown;
   public m_listener: b2ContactListener | null;
   public m_bodies: (b2Body | null)[];
@@ -208,14 +214,39 @@ export class b2Island {
     notPorted("b2Island.SolveTOI (m7: CCD/TOI)");
   }
 
-  // b2Island.as:279-330 — contact-result reporting. With zero contacts the report
-  // loop never runs; the null-listener early return is faithful. Full body at m4.
-  public Report(_constraints: unknown[]): void {
+  // b2Island.as:279-330 — contact-result reporting to the listener.
+  public Report(constraints: b2ContactConstraint[]): void {
     if (this.m_listener == null) {
       return;
     }
-    if (this.m_contactCount > 0) {
-      notPorted("b2Island.Report with contacts (m4: solver/contact results)");
+    let i = 0;
+    while (i < this.m_contactCount) {
+      const c: b2Contact = this.m_contacts[i]!;
+      const cc: b2ContactConstraint = constraints[i];
+      const cr: b2ContactResult = b2Island.s_reportCR;
+      cr.shape1 = c.m_shape1;
+      cr.shape2 = c.m_shape2;
+      const b1: b2Body = cr.shape1!.m_body!;
+      const manifoldCount: number = c.m_manifoldCount;
+      const manifolds: b2Manifold[] = c.GetManifolds()!;
+      let j = 0;
+      while (j < manifoldCount) {
+        const manifold: b2Manifold = manifolds[j];
+        cr.normal.SetV(manifold.normal);
+        let k = 0;
+        while (k < manifold.pointCount) {
+          const mp: b2ManifoldPoint = manifold.points[k];
+          const ccp: b2ContactConstraintPoint = cc.points[k];
+          cr.position = b1.GetWorldPoint(mp.localPoint1);
+          cr.normalImpulse = ccp.normalImpulse;
+          cr.tangentImpulse = ccp.tangentImpulse;
+          cr.id.key = mp.id.key;
+          this.m_listener.Result(cr);
+          k++;
+        }
+        j++;
+      }
+      i++;
     }
   }
 

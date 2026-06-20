@@ -16,6 +16,7 @@
 // To clear a failure: `node tools/sync-box2d.mjs` (re-vendors + re-pins).
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
@@ -54,6 +55,9 @@ function hashTree(root: string): { perFile: Record<string, string>; agg: string 
 
 interface Manifest {
   source: string;
+  sourceCommit?: string | null;
+  sourceCommitShort?: string | null;
+  sourceDirty?: boolean | null;
   aggregate: string;
   files: Record<string, string>;
 }
@@ -84,39 +88,64 @@ describe("box2d vendoring — drift guard (bit-exact engine must not diverge fro
     expect(vendored.agg).toBe(manifest!.aggregate);
   });
 
-  // FZ3 freshness. Two categories of upstream drift, treated differently because
-  // only one is dangerous to a BIT-EXACT engine:
-  //   - CHANGED / REMOVED pinned file: mspr currently vendors this file, so its
-  //     bytes now differ from canonical — mspr would run a stale engine for code
-  //     it actually imports (e.g. a solver bugfix it's missing). HARD FAIL.
-  //   - ADDED upstream file: a later-milestone file mspr hasn't adopted yet. It is
-  //     not imported until mspr pulls it, so it cannot change mspr's behavior.
-  //     Benign lag during co-development → loud warn, not a failure.
+  // FZ3 freshness — COMMIT-aware, WARN-only.
+  //
+  // mspr pins a COMMIT of FZ3 (manifest.sourceCommit). You pull commits, not someone's
+  // unsaved edits, so this check must NOT hard-fail just because FZ3's working tree has
+  // uncommitted WIP mid-port (e.g. the m4 solver being written live) — that would make
+  // mspr's suite red for work it shouldn't pull yet. The HARD invariant — mspr's vendored
+  // bytes == the pinned snapshot — is already enforced by the corruption guard above; and
+  // behavioral staleness (a real bugfix mspr is missing) is caught by the per-milestone
+  // hex16 goldens. So here we only:
+  //   - HARD: assert the pinned commit still EXISTS in FZ3 (the pin is reproducible);
+  //   - WARN: if FZ3's HEAD advanced past the pin, or its src/box2d has uncommitted
+  //     changes — i.e. "canonical moved; `npm run box2d:sync` when a milestone commits."
   // (Skipped entirely when FZ3 isn't checked out beside mspr — CI / standalone.)
   it.skipIf(!existsSync(FZ3_BOX2D))(
-    "no pinned Box2D file has diverged from FZ3 canonical (changed/removed → re-sync)",
+    "pinned FZ3 commit exists; warns (not fails) when canonical advances or is dirty",
     () => {
       expect(manifest).toBeTruthy();
-      const fz3 = hashTree(FZ3_BOX2D);
-      const want = manifest!.files;
-      const removed = Object.keys(want).filter((f) => !(f in fz3.perFile));
-      const changed = Object.keys(want).filter(
-        (f) => f in fz3.perFile && fz3.perFile[f] !== want[f],
-      );
-      const added = Object.keys(fz3.perFile).filter((f) => !(f in want));
-      if (added.length) {
-        // Benign: FZ3 has new milestone files mspr hasn't vendored. Surface it
-        // loudly so the lag is visible, but don't block mspr's unrelated work.
+      const FZ3_ROOT = resolve(REPO, "..", "FZ3");
+      const git = (...a: string[]) =>
+        execFileSync("git", ["-C", FZ3_ROOT, ...a], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+
+      let head = "";
+      let dirty = false;
+      let pinExists = true;
+      try {
+        head = git("rev-parse", "HEAD");
+        dirty = git("status", "--porcelain", "--", "src/box2d").length > 0;
+        if (manifest!.sourceCommit) {
+          try {
+            git("cat-file", "-e", `${manifest!.sourceCommit}^{commit}`);
+          } catch {
+            pinExists = false;
+          }
+        }
+      } catch {
+        return; // FZ3 isn't a git repo here — nothing to compare against.
+      }
+
+      if (manifest!.sourceCommit && head && head !== manifest!.sourceCommit) {
         console.warn(
-          `[box2d-sync] FZ3 has ${added.length} new file(s) not yet vendored ` +
-            `(run \`node tools/sync-box2d.mjs\` to pull): ${added.join(", ")}`,
+          `[box2d-sync] FZ3 advanced (pinned ${manifest!.sourceCommitShort ?? manifest!.sourceCommit.slice(0, 7)} → HEAD ${head.slice(0, 7)}). ` +
+            `Run \`npm run box2d:sync\` to pull when the milestone is committed.`,
         );
       }
-      // Dangerous staleness: a file mspr already vendors changed/vanished upstream.
+      if (dirty) {
+        console.warn(
+          "[box2d-sync] FZ3 src/box2d has uncommitted changes (WIP not pulled). " +
+            "Sync once it lands as a commit.",
+        );
+      }
+      // Reproducibility: the revision mspr claims to be pinned at must exist in FZ3.
       expect(
-        { removed, changed },
-        "a Box2D file mspr vendors diverged from FZ3 — re-sync with `node tools/sync-box2d.mjs`",
-      ).toEqual({ removed: [], changed: [] });
+        pinExists,
+        `pinned FZ3 commit ${manifest!.sourceCommit} is missing from FZ3 — history rewritten? re-sync`,
+      ).toBe(true);
     },
   );
 });

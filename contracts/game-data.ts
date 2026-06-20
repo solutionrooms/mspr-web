@@ -90,7 +90,9 @@ export type Levels = Level[];
 
 // ---------- data/roaddata.json (road-asset library referenced by level blocks) ----------
 export interface RoadChild { tag: string; [attr: string]: string }
-export interface RoadDef { [attr: string]: string | RoadChild[]; _children?: RoadChild[] }
+// Raw attrs (strings) plus the generic nested-element capture from extract_data.py.
+// The index signature must admit `undefined` so the optional `_children` is assignable.
+export interface RoadDef { _children?: RoadChild[]; [attr: string]: string | RoadChild[] | undefined }
 export interface RoadData {
   billboards: RoadDef[];
   billboardgroups: RoadDef[];

@@ -1,35 +1,79 @@
-// Live demo: the REAL bit-exact Box2DFlash 2.0.2 TypeScript port (src/box2d),
-// running in the browser. A fountain of shapeless bodies flung up with spin and
-// integrated under mspr's exact world config — this is the m0/m1 path the golden
-// hex16 tests gate (freefall + rotation), so it uses ZERO unported engine code
-// and ZERO copyrighted game art. The shapes drawn are cosmetic; the motion
-// (parabolic arcs + constant spin) is straight from the ported integrator.
+// Live demo: the REAL bit-exact Box2DFlash 2.0.2 TypeScript port (src/box2d) running
+// in the browser — now exercising the m4 sequential-impulse SOLVER (landed + bit-exact-
+// gated). Boxes drop into a bin and stack/settle with real friction + restitution. This
+// uses exactly the m4-validated path: doSleep OFF (sleep is m5), continuousPhysics OFF
+// (TOI is m7). Cosmetic shapes only — zero copyrighted game art.
 import { b2World } from "../src/box2d/Dynamics/b2World";
 import { b2AABB } from "../src/box2d/Collision/b2AABB";
 import { b2Vec2 } from "../src/box2d/Common/Math/b2Vec2";
 import { b2BodyDef } from "../src/box2d/Dynamics/b2BodyDef";
+import { b2PolygonDef } from "../src/box2d/Collision/Shapes/b2PolygonDef";
 import type { b2Body } from "../src/box2d/Dynamics/b2Body";
 
-const PHYS_STEP = 1 / 80; // physStep  (PhysicsBase.as — mspr config)
-const ITERS = 10; // physNumIterations
-const SCALE = 15; // world units → screen px
-const N = 80; // body count
+const PHYS_STEP = 1 / 80;
+const ITERS = 10;
+const MAX_BOXES = 130;
 
-// World setup mirrors PhysicsBase.InitBox2D / the m0-m1 test exactly.
-function makeWorld(): b2World {
-  const aabb = new b2AABB();
-  aabb.lowerBound.Set(-25000, -25000);
-  aabb.upperBound.Set(25000, 25000);
-  return new b2World(aabb, new b2Vec2(0, 20), true); // gravity (0,20), allowSleep
+// World — mspr config, but doSleep=false + continuousPhysics=false (the m4 solver path).
+const aabb = new b2AABB();
+aabb.lowerBound.Set(-25000, -25000);
+aabb.upperBound.Set(25000, 25000);
+const world = new b2World(aabb, new b2Vec2(0, 20), false);
+world.SetContinuousPhysics(false);
+
+// Fixed world-space bin (independent of screen; the view scales to fit it).
+const FLOOR_Y = 26;
+const WALL_X = 16;
+const TOP_Y = 0;
+
+function staticBox(cx: number, cy: number, hx: number, hy: number): void {
+  const bd = new b2BodyDef();
+  bd.position.Set(cx, cy);
+  const b = world.CreateBody(bd)!;
+  const sd = new b2PolygonDef();
+  sd.SetAsBox(hx, hy);
+  sd.friction = 0.6;
+  sd.restitution = 0.1;
+  b.CreateShape(sd);
 }
-const world = makeWorld();
+staticBox(0, FLOOR_Y + 0.5, WALL_X + 1, 0.5); // floor
+staticBox(-WALL_X - 0.5, FLOOR_Y / 2, 0.5, FLOOR_Y / 2 + 2); // left wall
+staticBox(WALL_X + 0.5, FLOOR_Y / 2, 0.5, FLOOR_Y / 2 + 2); // right wall
 
+interface Box {
+  body: b2Body;
+  color: string;
+}
+const boxes: Box[] = [];
+const COLORS = ["#e23b3b", "#2b6cd4", "#19a974", "#ffd23f", "#9b59b6", "#ff7f2a", "#16a2b8", "#ec407a"];
+const rand = (a: number, b: number) => a + Math.random() * (b - a);
+let spawned = 0;
+
+function spawnBox(): void {
+  if (boxes.length >= MAX_BOXES) {
+    const old = boxes.shift()!; // recycle the oldest to keep the bin flowing
+    world.DestroyBody(old.body);
+  }
+  const bd = new b2BodyDef();
+  bd.position.Set(rand(-WALL_X + 2, WALL_X - 2), TOP_Y);
+  const body = world.CreateBody(bd)!;
+  const sd = new b2PolygonDef();
+  sd.SetAsBox(0.7, 0.7);
+  sd.density = 0.5;
+  sd.friction = 0.5;
+  sd.restitution = 0.1;
+  body.CreateShape(sd);
+  body.SetMassFromShapes();
+  body.SetLinearVelocity(new b2Vec2(rand(-3, 3), rand(2, 5)));
+  body.SetAngularVelocity(rand(-4, 4));
+  boxes.push({ body, color: COLORS[spawned % COLORS.length] });
+  spawned++;
+}
+
+// ---- view ----
 const canvas = document.getElementById("c") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
-let W = 0,
-  H = 0,
-  ox = 0,
-  oy = 0;
+let W = 0, H = 0, SCALE = 20, ox = 0, oy = 0;
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   W = canvas.clientWidth;
@@ -37,68 +81,39 @@ function resize() {
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ox = W / 2; // world origin on screen
-  oy = H / 2;
+  SCALE = Math.min(W / (2 * WALL_X + 6), H / (FLOOR_Y + 6)); // fit the bin
+  ox = W / 2;
+  oy = (H - (FLOOR_Y + 2) * SCALE) / 2 + 1 * SCALE;
 }
 window.addEventListener("resize", resize);
 resize();
 
-const COLORS = ["#e23b3b", "#2b6cd4", "#19a974", "#ffd23f", "#9b59b6", "#ff7f2a", "#16a2b8", "#ec407a"];
-const rand = (a: number, b: number) => a + Math.random() * (b - a);
+const sx = (wx: number) => ox + wx * SCALE;
+const sy = (wy: number) => oy + wy * SCALE;
 
-interface Sprite {
-  body: b2Body;
-  color: string;
-  sides: number;
-  r: number;
-}
-const sprites: Sprite[] = [];
-
-// (re)launch a body from the bottom, flung upward (−y) with sideways drift + spin.
-function launch(b: b2Body) {
-  const wx = rand(-W * 0.32, W * 0.32) / SCALE;
-  const wy = (H * 0.5 + rand(20, 90)) / SCALE; // just below the screen (world +y is down)
-  b.SetXForm(new b2Vec2(wx, wy), rand(0, Math.PI * 2));
-  b.SetLinearVelocity(new b2Vec2(rand(-10, 10), rand(-30, -22))); // up + drift
-  b.SetAngularVelocity(rand(-7, 7));
-}
-
-for (let i = 0; i < N; i++) {
-  const bd = new b2BodyDef();
-  bd.massData.mass = 1;
-  bd.massData.I = 1;
-  const body = world.CreateBody(bd)!;
-  launch(body);
-  sprites.push({ body, color: COLORS[i % COLORS.length], sides: 3 + (i % 5), r: rand(7, 16) });
-}
-
-function drawShape(x: number, y: number, a: number, sides: number, r: number, color: string) {
+function drawBox(body: b2Body, hx: number, hy: number, fill: string, stroke: string) {
+  const p = body.GetPosition();
   ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(a);
+  ctx.translate(sx(p.x), sy(p.y));
+  ctx.rotate(body.GetAngle());
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  for (let k = 0; k < sides; k++) {
-    const ang = (k / sides) * Math.PI * 2 - Math.PI / 2;
-    const px = Math.cos(ang) * r,
-      py = Math.sin(ang) * r;
-    k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fillStyle = color;
+  ctx.rect(-hx * SCALE, -hy * SCALE, hx * 2 * SCALE, hy * 2 * SCALE);
   ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = "rgba(26,26,26,0.85)";
   ctx.stroke();
   ctx.restore();
 }
 
-let frames = 0,
-  steps = 0,
-  fps = 0,
-  lastT = performance.now(),
-  acc = 0;
+let frames = 0, steps = 0, fps = 0, lastT = performance.now(), acc = 0, sinceSpawn = 0;
 
 function frame(t: number) {
+  // Drip-feed boxes in.
+  if (++sinceSpawn >= 5) {
+    spawnBox();
+    sinceSpawn = 0;
+  }
   // Fixed cadence: 2× Step per displayed frame (the game's 2×(1/80) loop).
   world.Step(PHYS_STEP, ITERS);
   world.Step(PHYS_STEP, ITERS);
@@ -106,32 +121,14 @@ function frame(t: number) {
 
   ctx.fillStyle = "#fffdf5";
   ctx.fillRect(0, 0, W, H);
-  // faint grid (paint-paper)
-  ctx.strokeStyle = "rgba(0,0,0,0.05)";
-  ctx.lineWidth = 1;
-  for (let gx = 0; gx <= W; gx += 28) {
-    ctx.beginPath();
-    ctx.moveTo(gx, 0);
-    ctx.lineTo(gx, H);
-    ctx.stroke();
-  }
-  for (let gy = 0; gy <= H; gy += 28) {
-    ctx.beginPath();
-    ctx.moveTo(0, gy);
-    ctx.lineTo(W, gy);
-    ctx.stroke();
-  }
 
-  for (const s of sprites) {
-    const p = s.body.GetPosition();
-    const sx = ox + p.x * SCALE;
-    const sy = oy + p.y * SCALE;
-    if (sy > H + 60 || sx < -80 || sx > W + 80) {
-      launch(s.body); // recycle once it leaves the stage
-      continue;
-    }
-    drawShape(sx, sy, s.body.GetAngle(), s.sides, s.r, s.color);
-  }
+  // bin
+  ctx.fillStyle = "#cdbfa6";
+  ctx.fillRect(sx(-WALL_X - 1), sy(FLOOR_Y), (2 * WALL_X + 2) * SCALE, SCALE);
+  ctx.fillRect(sx(-WALL_X - 1), sy(0), SCALE, FLOOR_Y * SCALE);
+  ctx.fillRect(sx(WALL_X), sy(0), SCALE, FLOOR_Y * SCALE);
+
+  for (const b of boxes) drawBox(b.body, 0.7, 0.7, b.color, "rgba(26,26,26,0.85)");
 
   frames++;
   acc += t - lastT;
@@ -141,7 +138,7 @@ function frame(t: number) {
     frames = 0;
     acc = 0;
     const hud = document.getElementById("hud");
-    if (hud) hud.textContent = `engine: live · ${N} bodies · ${steps.toLocaleString()} sim steps · ${fps} fps`;
+    if (hud) hud.textContent = `m4 solver: live · ${boxes.length} boxes · ${steps.toLocaleString()} sim steps · ${fps} fps`;
   }
   requestAnimationFrame(frame);
 }

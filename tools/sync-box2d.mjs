@@ -95,14 +95,52 @@ function gitInfo(repoDir, subdir) {
   }
 }
 
+// Aggregate hash of FZ3's box2d as COMMITTED at HEAD (reads blobs via `git show`, NOT the
+// working tree — so uncommitted WIP is ignored). This is what makes the freshness gate
+// CONTENT-based: a squash/rebase that rewrites the commit SHA but leaves box2d byte-
+// identical is NOT "stale" (same aggregate), while a real committed advance IS. Returns
+// null if git/HEAD is unavailable. `subdir` is the box2d path relative to the repo root.
+// Read FZ3's box2d as COMMITTED at HEAD: { rel -> Buffer } of each tracked .ts blob via
+// `git show` (NOT the working tree). This is what the sync vendors — so uncommitted WIP
+// (a half-ported m6/m7) can NEVER be pinned into mspr; we only ever vendor a reproducible
+// committed revision. Returns null if git/HEAD is unavailable (caller falls back to the
+// working tree). `subdir` is the box2d path relative to the repo root.
+function readHeadTree(repoDir, subdir) {
+  const gitText = (...a) =>
+    execFileSync("git", ["-C", repoDir, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  const gitBuf = (...a) =>
+    execFileSync("git", ["-C", repoDir, ...a], { maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    const listed = gitText("ls-tree", "-r", "--name-only", "HEAD", "--", subdir).trim();
+    if (!listed) return null;
+    const prefix = subdir.replace(/\/?$/, "/");
+    const perFile = {};
+    for (const path of listed.split("\n")) {
+      const base = path.split("/").pop();
+      const rel = path.slice(prefix.length).split(/[\\/]/).join("/");
+      if (!path.endsWith(".ts") || IGNORE.has(base) || IGNORE.has(rel)) continue;
+      perFile[rel] = gitBuf("show", `HEAD:${path}`);
+    }
+    return perFile;
+  } catch {
+    return null;
+  }
+}
+
+function gitHeadAggregate(repoDir, subdir) {
+  const head = readHeadTree(repoDir, subdir);
+  if (!head) return null;
+  const perFile = {};
+  for (const rel of Object.keys(head)) perFile[rel] = sha256(head[rel]);
+  return aggregate(perFile);
+}
+
 if (!existsSync(FZ3_BOX2D)) {
   console.error(`[sync-box2d] canonical FZ3 source not found at: ${FZ3_BOX2D}`);
   console.error("  This script must run where FZ3 is checked out beside mspr.");
   console.error("  (The vendored copy + manifest still let mspr build standalone.)");
   process.exit(1);
 }
-
-const src = hashTree(FZ3_BOX2D);
 
 if (CHECK_ONLY) {
   if (!existsSync(MANIFEST)) {
@@ -111,34 +149,63 @@ if (CHECK_ONLY) {
   }
   const man = JSON.parse(readFileSync(MANIFEST, "utf8"));
   const vendored = hashTree(MSPR_BOX2D);
-  const problems = [];
-  // Corruption guard: vendored bytes must equal the manifest exactly.
-  if (man.aggregate !== vendored.agg)
-    problems.push("mspr vendored copy differs from manifest (hand-edited — re-sync).");
-  // FZ3 freshness, same semantics as test/box2d-sync.test.ts: a CHANGED/REMOVED
-  // pinned file is dangerous staleness (hard fail); a new ADDED upstream file is
-  // benign milestone lag (warn). See that test for the rationale.
-  const removed = Object.keys(man.files).filter((f) => !(f in src.perFile));
-  const changed = Object.keys(man.files).filter((f) => f in src.perFile && src.perFile[f] !== man.files[f]);
-  const added = Object.keys(src.perFile).filter((f) => !(f in man.files));
-  if (added.length)
-    console.warn(`[sync-box2d] note: FZ3 has ${added.length} new file(s) not yet vendored — run sync to pull: ${added.join(", ")}`);
-  if (removed.length) problems.push(`pinned file(s) removed upstream: ${removed.join(", ")}`);
-  if (changed.length) problems.push(`pinned file(s) changed upstream (mspr STALE): ${changed.join(", ")}`);
-  if (problems.length) {
-    const live = gitInfo(resolve(MSPR_ROOT, "..", "FZ3"), "src/box2d");
-    const pinned = man.sourceCommitShort ? `${man.sourceCommitShort}${man.sourceDirty ? "-dirty" : ""}` : "(unknown)";
-    const now = live.short ? `${live.short}${live.dirty ? "-dirty" : ""}` : "(unknown)";
-    console.error(`[sync-box2d] DRIFT (pinned FZ3 ${pinned} → now ${now}):\n  - ` + problems.join("\n  - "));
+  // HARD: corruption guard — vendored bytes must equal the manifest exactly. This is
+  // the bit-exact invariant (no hand-edits to the vendored engine).
+  if (man.aggregate !== vendored.agg) {
+    console.error("[sync-box2d] DRIFT: mspr vendored copy differs from manifest (hand-edited — re-sync).");
     process.exit(1);
   }
-  console.log(`[sync-box2d] OK — ${Object.keys(man.files).length} files in sync (agg ${man.aggregate.slice(0, 12)}…).`);
+  // FZ3 freshness — CONTENT-based (commit SHA is a human ref only). NOTE the deliberate
+  // split vs test/box2d-sync.test.ts: the TEST treats freshness as warn-only (mspr's own
+  // correctness must not be hostage to FZ3's commit cadence), but THIS command is the
+  // explicit "am I in sync?" gate — so a real committed CONTENT advance is a HARD fail
+  // (a milestone is waiting; pull it). A squash/rebase that rewrites the SHA but leaves
+  // box2d byte-identical is NOT stale; uncommitted WIP is a warn (you pull commits).
+  const FZ3_ROOT = resolve(MSPR_ROOT, "..", "FZ3");
+  const live = gitInfo(FZ3_ROOT, "src/box2d");
+  const headAgg = gitHeadAggregate(FZ3_ROOT, "src/box2d");
+  if (live.dirty)
+    console.warn("[sync-box2d] note: FZ3 src/box2d has uncommitted WIP (not pulled) — sync once it lands as a commit.");
+  if (headAgg && headAgg !== man.aggregate) {
+    console.error(
+      `[sync-box2d] STALE: FZ3 box2d content advanced (pinned ${man.sourceCommitShort ?? "?"} → HEAD ${live.short ?? "?"}). ` +
+        "A milestone is waiting — run `npm run box2d:sync` to pull, then add the mspr golden.",
+    );
+    process.exit(1);
+  }
+  if (man.sourceCommit && live.commit && live.commit !== man.sourceCommit)
+    console.warn(
+      `[sync-box2d] note: FZ3 commit changed (${man.sourceCommitShort ?? "?"} → ${live.short}) but box2d content is identical (squash/rebase). ` +
+        "Re-run `npm run box2d:sync` to re-pin the ref (no content change).",
+    );
+  console.log(`[sync-box2d] OK — vendored matches manifest (${Object.keys(man.files).length} files, agg ${man.aggregate.slice(0, 12)}…, pinned FZ3 ${man.sourceCommitShort ?? "?"}).`);
   process.exit(0);
 }
 
-// --- sync: make mspr/src/box2d an exact mirror of FZ3's .ts set ---
+// --- sync: make mspr/src/box2d an exact mirror of FZ3's COMMITTED HEAD .ts set ---
+// Vendor from `git show HEAD:` (committed content) so uncommitted WIP is never pinned.
+// Fall back to the working tree only if FZ3 isn't a git checkout here.
+const FZ3_ROOT = resolve(MSPR_ROOT, "..", "FZ3");
+const fz3Git = gitInfo(FZ3_ROOT, "src/box2d");
+const headTree = readHeadTree(FZ3_ROOT, "src/box2d"); // { rel -> Buffer } or null
+let contentOf; // (rel) -> Buffer
+let srcSet;
+if (headTree) {
+  if (fz3Git.dirty)
+    console.warn(
+      "[sync-box2d] note: FZ3 src/box2d has uncommitted WIP — vendoring the COMMITTED HEAD " +
+        `(${fz3Git.short}), NOT the working tree. Re-sync after it commits to pull the rest.`,
+    );
+  srcSet = new Set(Object.keys(headTree));
+  contentOf = (rel) => headTree[rel];
+} else {
+  console.warn("[sync-box2d] note: FZ3 is not a git checkout — falling back to working-tree copy.");
+  const wt = hashTree(FZ3_BOX2D);
+  srcSet = new Set(Object.keys(wt.perFile));
+  contentOf = (rel) => readFileSync(join(FZ3_BOX2D, rel));
+}
+
 mkdirSync(MSPR_BOX2D, { recursive: true });
-const srcSet = new Set(src.perFile ? Object.keys(src.perFile) : []);
 
 // Remove vendored .ts no longer present upstream (deleted files).
 for (const rel of listTs(MSPR_BOX2D)) {
@@ -148,39 +215,39 @@ for (const rel of listTs(MSPR_BOX2D)) {
   }
 }
 
-// Copy every upstream file verbatim.
+// Copy every upstream file verbatim + compute the pinned hashes from the SAME bytes.
 let copied = 0;
+const perFile = {};
 for (const rel of srcSet) {
-  const from = join(FZ3_BOX2D, rel);
+  const buf = contentOf(rel);
+  perFile[rel] = sha256(buf);
   const to = join(MSPR_BOX2D, rel);
   mkdirSync(dirname(to), { recursive: true });
-  const buf = readFileSync(from);
   const cur = existsSync(to) ? readFileSync(to) : null;
   if (!cur || !cur.equals(buf)) {
     writeFileSync(to, buf);
     copied++;
   }
 }
+const agg = aggregate(perFile);
 
-const fz3Git = gitInfo(resolve(MSPR_ROOT, "..", "FZ3"), "src/box2d");
 const manifest = {
   _comment:
     "AUTO-GENERATED by tools/sync-box2d.mjs. Do not edit. Box2D is vendored from " +
-    "FZ3 (canonical); hand-editing src/box2d here breaks the bit-exact guarantee. " +
-    "Re-sync with `node tools/sync-box2d.mjs`. See DEVELOPER_MESSAGES.md.",
+    "FZ3 (canonical) at the COMMITTED HEAD; hand-editing src/box2d here breaks the " +
+    "bit-exact guarantee. Re-sync with `node tools/sync-box2d.mjs`. See DEVELOPER_MESSAGES.md.",
   source: "FZ3/src/box2d",
   sourceCommit: fz3Git.commit,
   sourceCommitShort: fz3Git.short,
-  // true => FZ3's src/box2d had uncommitted edits at sync; the commit alone does
-  // not reproduce the pinned bytes — trust `aggregate` (content hash) instead.
+  // FZ3 working tree had uncommitted edits at sync time (informational only — the
+  // vendored content is the COMMITTED HEAD, so `aggregate` is reproducible from the commit).
   sourceDirty: fz3Git.dirty,
-  aggregate: src.agg,
-  files: src.perFile,
+  aggregate: agg,
+  files: perFile,
 };
 writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + "\n");
 
-const rev = fz3Git.short ? `${fz3Git.short}${fz3Git.dirty ? "-dirty" : ""}` : "(no git)";
 console.log(
-  `[sync-box2d] synced ${srcSet.size} files from ${relative(MSPR_ROOT, FZ3_BOX2D)} @ ${rev} ` +
-    `(${copied} changed), pinned agg ${src.agg.slice(0, 12)}…`,
+  `[sync-box2d] synced ${srcSet.size} files from FZ3 @ ${fz3Git.short ?? "(no git)"} (committed HEAD) ` +
+    `(${copied} changed), pinned agg ${agg.slice(0, 12)}…`,
 );

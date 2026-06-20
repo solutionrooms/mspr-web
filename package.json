@@ -27,6 +27,12 @@
     "oracle:capture:broadphase": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-broadphase.swf test/goldens/m2b-broadphase.json --done DONE",
     "oracle:build:collide": "node tools/oracle/build-harness.mjs tools/oracle/harness-collide.as",
     "oracle:capture:collide": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-collide.swf test/goldens/m3a-collide.json --done DONE",
+    "oracle:build:contact": "node tools/oracle/build-harness.mjs tools/oracle/harness-contact.as",
+    "oracle:capture:contact": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-contact.swf test/goldens/m3b-contact.json --done DONE",
+    "oracle:build:solver": "node tools/oracle/build-harness.mjs tools/oracle/harness-solver.as",
+    "oracle:capture:solver": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-solver.swf test/goldens/m4-solver.json --done DONE",
+    "oracle:build:sleep": "node tools/oracle/build-harness.mjs tools/oracle/harness-sleep.as",
+    "oracle:capture:sleep": "node tools/oracle/capture-lines.mjs tools/oracle/build/harness-sleep.swf test/goldens/m5-sleep.json --done DONE",
     "dev": "vite",
     "build:web": "vite build"
   },

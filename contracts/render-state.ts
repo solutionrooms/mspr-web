@@ -41,8 +41,13 @@ export interface ColorTransformLike {
   alphaOffset: number;
 }
 
-/** The compositor layers, back-to-front. Names mirror Game.as's BitmapData layers;
- *  confirm the exact set + order against Game.Render. */
+/** ⚠ UNDER REVISION (RenderFrame v2 — see DEVELOPER_MESSAGES "road renderer IS the sprite
+ *  compositor"). Render's Game.Render audit found mspr is pseudo-3D: most objects are
+ *  TRACK-space and drawn by RoadRender's perspective depth-pass interleaved with road
+ *  segments — NOT a back-to-front composite of flat named layers. This 7-value enum +
+ *  "group by layer, sort by zpos" holds only for the true overlays/HUD. The 3D-object vs
+ *  overlay split + RoadState are ONE design, co-designed with render before RoadRender lands.
+ *  The compositor layers, back-to-front (legacy v1 model): */
 export type RenderLayer =
   | "background"
   | "scroll"
@@ -53,28 +58,43 @@ export type RenderLayer =
   | "hud";
 
 /** Flash blend modes used by DisplayObjFrame (RenderAtRotScaled* variants).
- *  'normal' = alpha-over, 'add' = additive. 'layer'/'overlay' have no direct WebGL
- *  blendFunc — render dev implements them shader-side (see RENDER_DEV.md). */
+ *  'normal' = alpha-over (the whole GameObj_Base render path), 'add' = additive
+ *  (effects/particles). 'layer'/'overlay' are kept in the union for completeness but
+ *  have NO active callers in the shipped game's render path and no data config selecting
+ *  them (verified: GameObj_Base uses only RenderAtRotScaled[_Xflip]; the Layer/Overlay
+ *  wrappers in DisplayObj.as are dead pass-throughs). DEPRIORITISE them — build
+ *  normal+add first; flag if a real caller ever surfaces. (Answer to render Q#4.) */
 export type BlendMode = "normal" | "add" | "layer" | "overlay";
 
+/**
+ * A car is NOT one sprite — it renders as a STACK of DisplayObj layers
+ * (car_dobj_layer0 / _shadow / _1 / _color / _2 / _headlights; GameObj.as:1241-1260),
+ * with the per-player recolour `carCT = ColorTransform(1,1,1,1, r-255,g-255,b-255, 0)`
+ * applied ONLY to the `_color` layer (GameObj.as:3246) and a fixed
+ * `shadowCT(1,1,1,1, -255,-255,-255,-128)` on `_shadow`. CONFIRMED: the game emits ONE
+ * RenderObj per layer (each its own `clip` + `colorTransform` + `zpos`); the renderer
+ * just draws the list. Render owns adding the `car_dobj_layer_*` clips to the atlas.
+ */
 export interface RenderObj {
-  /** Sprite/symbol identity in the asset atlas. OPEN: keyed by the SWF linkage/clip
-   *  name (physobjs[].graphics[].clip, billboard.mc, etc.); render dev confirms the
-   *  atlas key once the asset pipeline lands. */
+  /** Sprite/symbol identity in the asset atlas = the SWF SymbolClass/linkage name
+   *  (CONFIRMED: matches physobjs[].graphics[].clip, roaddata billboard `.mc`,
+   *  caroffsets[].mcname). For cars, the per-layer clip (e.g. `car_dobj_layer_color`). */
   clip: string;
   /** 0-based timeline frame within the clip. */
   frame: number;
   /** Screen-space position (px), camera already applied. */
   x: number;
   y: number;
-  /** Registration/anchor offset within the sprite (px), applied before rotate/scale. */
-  xoff: number;
-  yoff: number;
+  /** Registration/anchor offset (px), applied before rotate/scale. OPTIONAL: the atlas
+   *  owns pivots per (clip,frame) — omit and the renderer uses the atlas pivot (cars:
+   *  caroffsets (xoff,yoff); others: DefineSprite registration). Only set to OVERRIDE. */
+  xoff?: number;
+  yoff?: number;
   /** Rotation in RADIANS. */
   dir: number;
-  /** Uniform scale (or per-axis if needed for the road — confirm). */
+  /** Uniform scale. */
   scale: number;
-  /** Horizontal flip. */
+  /** Horizontal flip (negates X AFTER rotation — RenderAtRotScaled_Xflip). */
   xflip: boolean;
   /** Which compositor layer this draws into. */
   layer: RenderLayer;
@@ -82,8 +102,12 @@ export interface RenderObj {
   zpos: number;
   /** 0..1 (equals colorTransform.alphaMultiplier when a CT is present). */
   alpha: number;
-  /** Optional full recolour (mult + offset — the software path uses both). */
+  /** Full recolour (mult + offset). IGNORED when blend==='add' — the additive path
+   *  passes CT=null (DisplayObjFrame.as:346), so the game must not rely on tint+add. */
   colorTransform?: ColorTransformLike;
+  /** NEAREST (false, the default — GameObj_Base.renderSmooth=false) vs LINEAR sampling;
+   *  per-object (DisplayObjFrame param7). (Added per render Q#3.) */
+  smooth?: boolean;
   /** Default 'normal'. */
   blend?: BlendMode;
 }
