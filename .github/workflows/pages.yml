@@ -1,14 +1,19 @@
 name: Deploy GitHub Pages
 
-# Publishes the static landing page in site/ to GitHub Pages.
-# Later: swap the artifact path to the Vite web build (dist-web) once the
-# renderer can produce a playable build — e.g. add an `npm ci && npm run
-# bootstrap && npm run build:web` step and upload `dist-web`.
+# Builds the Vite web app in web/ (the live bit-exact-engine demo; will grow into
+# the playable game) and publishes it to GitHub Pages. No bootstrap needed: the
+# demo imports only src/box2d (no SWF / no game art), so CI needs just devDeps.
 
 on:
   push:
     branches: [main]
-    paths: [site/**, .github/workflows/pages.yml]
+    paths:
+      - web/**
+      - src/**
+      - vite.config.ts
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
@@ -21,16 +26,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build-deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+      - run: npm run build:web
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: dist-web
       - id: deployment
         uses: actions/deploy-pages@v4
