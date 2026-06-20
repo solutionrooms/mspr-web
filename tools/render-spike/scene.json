@@ -26,6 +26,18 @@
       "xflip": false,
       "blend": "add",
       "ct": null
+    },
+    {
+      "name": "additive control on LOSSLESS source (isolates add-math from JPEG decode) — Cars frame 3 drawn additive",
+      "clip": "Cars",
+      "frame": 3,
+      "x": 110,
+      "y": 110,
+      "scale": 0.55,
+      "dirDeg": 0,
+      "xflip": false,
+      "blend": "add",
+      "ct": null
     }
   ]
 }

@@ -1,0 +1,204 @@
+{
+  "meta": {
+    "swf": "tools/oracle/build/harness-shapes.swf",
+    "fields": [
+      "px",
+      "py",
+      "a",
+      "vx",
+      "vy",
+      "w"
+    ],
+    "tags": {
+      "CIRC": 1,
+      "TRI": 3,
+      "TRICORE": 3,
+      "TRINORM": 3,
+      "BOX": 3,
+      "BOXCORE": 4,
+      "BOXNORM": 4
+    },
+    "oracle": "Ruffle (selfhosted) headless via puppeteer"
+  },
+  "golden": {
+    "CIRC": [
+      {
+        "step": 0,
+        "fields": [
+          "3fd5b6f5d205a7fc",
+          "3fc999999999999a",
+          "bfb999999999999a",
+          "3fb3fa3e5094904e"
+        ]
+      }
+    ],
+    "TRI": [
+      {
+        "step": 0,
+        "fields": [
+          "3fd8f5c28f5c28f6",
+          "3fb9999999999999",
+          "bfb111111111110f",
+          "3fbbf487fcb923a2"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "3fb9999999999999",
+          "bfb111111111110f"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "0000000000000000",
+          "3fc3333333333334",
+          "3ff0000000000000",
+          "3fe4cccccccccccd",
+          "3ff0000000000000",
+          "0000000000000000",
+          "8000000000000000",
+          "3ff0000000000000"
+        ]
+      }
+    ],
+    "TRICORE": [
+      {
+        "step": 0,
+        "fields": [
+          "bfece8e916852e6d",
+          "bfdd70a3d70a3d71"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "3feddb647c4a2605",
+          "bfdd70a3d70a3d71"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "3fd293c5de9cc422",
+          "3fe77a7a1a4e71c4"
+        ]
+      }
+    ],
+    "TRINORM": [
+      {
+        "step": 0,
+        "fields": [
+          "0000000000000000",
+          "bff0000000000000"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "3fec2cd1ba67a4ff",
+          "3fde57a6c8be62ea"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "bfe6a09e667f3bcc",
+          "3fe6a09e667f3bcc"
+        ]
+      }
+    ],
+    "BOX": [
+      {
+        "step": 0,
+        "fields": [
+          "3feeb851eb851eb8",
+          "0000000000000000",
+          "0000000000000000",
+          "3fe0624dd2f1a9fb"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "0000000000000000",
+          "0000000000000000"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "0000000000000000",
+          "0000000000000000",
+          "3ff3333333333333",
+          "3fd999999999999a",
+          "3ff0000000000000",
+          "0000000000000000",
+          "8000000000000000",
+          "3ff0000000000000"
+        ]
+      }
+    ],
+    "BOXCORE": [
+      {
+        "step": 0,
+        "fields": [
+          "bff28f5c28f5c28f",
+          "bfd70a3d70a3d70b"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "3ff28f5c28f5c28f",
+          "bfd70a3d70a3d70b"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "3ff28f5c28f5c28f",
+          "3fd70a3d70a3d70b"
+        ]
+      },
+      {
+        "step": 3,
+        "fields": [
+          "bff28f5c28f5c28f",
+          "3fd70a3d70a3d70b"
+        ]
+      }
+    ],
+    "BOXNORM": [
+      {
+        "step": 0,
+        "fields": [
+          "0000000000000000",
+          "bff0000000000000"
+        ]
+      },
+      {
+        "step": 1,
+        "fields": [
+          "3ff0000000000000",
+          "8000000000000000"
+        ]
+      },
+      {
+        "step": 2,
+        "fields": [
+          "0000000000000000",
+          "3ff0000000000000"
+        ]
+      },
+      {
+        "step": 3,
+        "fields": [
+          "bff0000000000000",
+          "8000000000000000"
+        ]
+      }
+    ]
+  }
+}

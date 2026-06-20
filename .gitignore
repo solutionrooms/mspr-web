@@ -32,5 +32,8 @@ tools/atlas/work/
 # packed atlas (atlas.png/json — third-party game art)
 src/render/assets/
 
+# render-spike outputs (SWF-derived art: webgl/ruffle/diff/sidebyside PNGs)
+tools/render-spike/out/
+
 # generated web assets
 public/assets/
