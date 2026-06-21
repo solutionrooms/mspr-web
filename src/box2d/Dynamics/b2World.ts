@@ -17,8 +17,20 @@ import { b2Contact } from "./Contacts/b2Contact";
 import { b2Island } from "./b2Island";
 import { b2TimeStep } from "./b2TimeStep";
 import { b2Settings } from "../Common/b2Settings";
-import type { b2Joint } from "./Joints/b2Joint";
+import { b2TimeOfImpact } from "../Collision/b2TimeOfImpact";
+import type { b2Shape } from "../Collision/Shapes/b2Shape";
+import { b2Joint } from "./Joints/b2Joint";
 import type { b2JointDef } from "./Joints/b2JointDef";
+// Side-effect imports: register the concrete joint types with the joint factory so
+// b2Joint.Create(def) can dispatch. FZ3 creates revolute/prismatic/distance/mouse;
+// pulley/gear are ported for completeness (the pulley def is built but never turned
+// into a joint by PhysicsBase, and gear is unused).
+import "./Joints/b2RevoluteJoint";
+import "./Joints/b2PrismaticJoint";
+import "./Joints/b2DistanceJoint";
+import "./Joints/b2MouseJoint";
+import "./Joints/b2PulleyJoint";
+import "./Joints/b2GearJoint";
 import type { b2ContactEdge } from "./Contacts/b2ContactEdge";
 import type { b2JointEdge } from "./Joints/b2JointEdge";
 import type { b2ContactListener } from "./b2ContactListener";
@@ -143,12 +155,91 @@ export class b2World {
     --this.m_bodyCount;
   }
 
-  // b2World.as:204-309 — joint lifecycle. Ported at m6 (joints).
-  public CreateJoint(_def: b2JointDef): b2Joint {
-    return notPorted("b2World.CreateJoint (m6: joints)");
+  // b2World.as:204-246
+  public CreateJoint(def: b2JointDef): b2Joint {
+    const joint: b2Joint = b2Joint.Create(def, this.m_blockAllocator);
+    joint.m_prev = null;
+    joint.m_next = this.m_jointList;
+    if (this.m_jointList) {
+      this.m_jointList.m_prev = joint;
+    }
+    this.m_jointList = joint;
+    ++this.m_jointCount;
+    joint.m_node1.joint = joint;
+    joint.m_node1.other = joint.m_body2;
+    joint.m_node1.prev = null;
+    joint.m_node1.next = joint.m_body1.m_jointList;
+    if (joint.m_body1.m_jointList) {
+      joint.m_body1.m_jointList.prev = joint.m_node1;
+    }
+    joint.m_body1.m_jointList = joint.m_node1;
+    joint.m_node2.joint = joint;
+    joint.m_node2.other = joint.m_body1;
+    joint.m_node2.prev = null;
+    joint.m_node2.next = joint.m_body2.m_jointList;
+    if (joint.m_body2.m_jointList) {
+      joint.m_body2.m_jointList.prev = joint.m_node2;
+    }
+    joint.m_body2.m_jointList = joint.m_node2;
+    if (def.collideConnected === false) {
+      const body: b2Body = def.body1!.m_shapeCount < def.body2!.m_shapeCount ? def.body1! : def.body2!;
+      let s: b2Shape | null = body.m_shapeList;
+      while (s) {
+        s.RefilterProxy(this.m_broadPhase, body.m_xf);
+        s = s.m_next;
+      }
+    }
+    return joint;
   }
-  public DestroyJoint(_joint: b2Joint): void {
-    notPorted("b2World.DestroyJoint (m6: joints)");
+
+  // b2World.as:248-309
+  public DestroyJoint(joint: b2Joint): void {
+    const collideConnected: boolean = joint.m_collideConnected;
+    if (joint.m_prev) {
+      joint.m_prev.m_next = joint.m_next;
+    }
+    if (joint.m_next) {
+      joint.m_next.m_prev = joint.m_prev;
+    }
+    if (joint === this.m_jointList) {
+      this.m_jointList = joint.m_next;
+    }
+    const body1: b2Body = joint.m_body1;
+    const body2: b2Body = joint.m_body2;
+    body1.WakeUp();
+    body2.WakeUp();
+    if (joint.m_node1.prev) {
+      joint.m_node1.prev.next = joint.m_node1.next;
+    }
+    if (joint.m_node1.next) {
+      joint.m_node1.next.prev = joint.m_node1.prev;
+    }
+    if (joint.m_node1 === body1.m_jointList) {
+      body1.m_jointList = joint.m_node1.next;
+    }
+    joint.m_node1.prev = null;
+    joint.m_node1.next = null;
+    if (joint.m_node2.prev) {
+      joint.m_node2.prev.next = joint.m_node2.next;
+    }
+    if (joint.m_node2.next) {
+      joint.m_node2.next.prev = joint.m_node2.prev;
+    }
+    if (joint.m_node2 === body2.m_jointList) {
+      body2.m_jointList = joint.m_node2.next;
+    }
+    joint.m_node2.prev = null;
+    joint.m_node2.next = null;
+    b2Joint.Destroy(joint, this.m_blockAllocator);
+    --this.m_jointCount;
+    if (collideConnected === false) {
+      const body: b2Body = body1.m_shapeCount < body2.m_shapeCount ? body1 : body2;
+      let s: b2Shape | null = body.m_shapeList;
+      while (s) {
+        s.RefilterProxy(this.m_broadPhase, body.m_xf);
+        s = s.m_next;
+      }
+    }
   }
 
   // b2World.as:316-318/321-323/326-328
@@ -327,11 +418,21 @@ export class b2World {
   // boundary listener slot (set via SetBoundaryListener at m5)
   public m_boundaryListener: { Violation(b: b2Body): void } | null = null;
 
-  // b2World.as:568-757 — continuous collision. The reset loops are faithful; the
-  // TOI candidate-scan + sub-step resolve are ported at m7 (CCD/TOI). With an empty
-  // contact list the original immediately finds no candidate and breaks, so the
-  // resolve loop is a no-op here.
-  public SolveTOI(_step: b2TimeStep): void {
+  // b2World.as:568-757 — continuous collision. Repeatedly find the earliest TOI among
+  // all fast (non-slow, solid) contacts, advance both bodies to it, re-solve ONLY that
+  // swept island for the remaining sub-step, and repeat. The island assembly advances
+  // each newly-reached non-static body to the TOI and wakes it (SB2 traps preserved:
+  // re-solve only the swept pair; advance BOTH sweeps; static/sleeping pairs skipped).
+  public SolveTOI(step: b2TimeStep): void {
+    const island: b2Island = new b2Island(
+      this.m_bodyCount,
+      b2Settings.b2_maxTOIContactsPerIsland,
+      0,
+      this.m_stackAllocator,
+      this.m_contactListener,
+    );
+    const queueCapacity: number = this.m_bodyCount;
+    const queue: (b2Body | null)[] = new Array(queueCapacity);
     let b: b2Body | null = this.m_bodyList;
     while (b) {
       b.m_flags &= ~b2Body.e_islandFlag;
@@ -343,8 +444,128 @@ export class b2World {
       c.m_flags &= ~(b2Contact.e_toiFlag | b2Contact.e_islandFlag);
       c = c.m_next;
     }
-    if (this.m_contactList != null) {
-      notPorted("b2World.SolveTOI candidate scan + resolve (m7: CCD/TOI)");
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      let minContact: b2Contact | null = null;
+      let minTOI: number = 1;
+      c = this.m_contactList;
+      for (; c; c = c.m_next) {
+        if (!(c.m_flags & (b2Contact.e_slowFlag | b2Contact.e_nonSolidFlag))) {
+          let toi: number = 1;
+          if (c.m_flags & b2Contact.e_toiFlag) {
+            toi = c.m_toi;
+          } else {
+            const s1: b2Shape = c.m_shape1!;
+            const s2: b2Shape = c.m_shape2!;
+            const b1: b2Body = s1.m_body!;
+            const b2: b2Body = s2.m_body!;
+            if ((b1.IsStatic() || b1.IsSleeping()) && (b2.IsStatic() || b2.IsSleeping())) {
+              continue;
+            }
+            let t0: number = b1.m_sweep.t0;
+            if (b1.m_sweep.t0 < b2.m_sweep.t0) {
+              t0 = b2.m_sweep.t0;
+              b1.m_sweep.Advance(t0);
+            } else if (b2.m_sweep.t0 < b1.m_sweep.t0) {
+              t0 = b1.m_sweep.t0;
+              b2.m_sweep.Advance(t0);
+            }
+            toi = b2TimeOfImpact.TimeOfImpact(c.m_shape1!, b1.m_sweep, c.m_shape2!, b2.m_sweep);
+            if (toi > 0 && toi < 1) {
+              toi = (1 - toi) * t0 + toi;
+              if (toi > 1) {
+                toi = 1;
+              }
+            }
+            c.m_toi = toi;
+            c.m_flags |= b2Contact.e_toiFlag;
+          }
+          if (Number.MIN_VALUE < toi && toi < minTOI) {
+            minContact = c;
+            minTOI = toi;
+          }
+        }
+      }
+      if (minContact == null || 1 - 100 * Number.MIN_VALUE < minTOI) {
+        break;
+      }
+      const s1: b2Shape = minContact.m_shape1!;
+      const s2: b2Shape = minContact.m_shape2!;
+      const b1: b2Body = s1.m_body!;
+      const b2: b2Body = s2.m_body!;
+      b1.Advance(minTOI);
+      b2.Advance(minTOI);
+      minContact.Update(this.m_contactListener);
+      minContact.m_flags &= ~b2Contact.e_toiFlag;
+      if (minContact.m_manifoldCount !== 0) {
+        let seed: b2Body = b1;
+        if (seed.IsStatic()) {
+          seed = b2;
+        }
+        island.Clear();
+        let queueSize: number = 0;
+        queue[queueSize++] = seed;
+        seed.m_flags |= b2Body.e_islandFlag;
+        while (queueSize > 0) {
+          b = queue[--queueSize];
+          island.AddBody(b!);
+          b!.m_flags &= ~b2Body.e_sleepFlag;
+          if (!b!.IsStatic()) {
+            let cn: b2ContactEdge | null = b!.m_contactList;
+            while (cn) {
+              if (island.m_contactCount !== island.m_contactCapacity) {
+                if (!(cn.contact!.m_flags & (b2Contact.e_islandFlag | b2Contact.e_slowFlag | b2Contact.e_nonSolidFlag))) {
+                  if (cn.contact!.m_manifoldCount !== 0) {
+                    island.AddContact(cn.contact!);
+                    cn.contact!.m_flags |= b2Contact.e_islandFlag;
+                    const other: b2Body = cn.other!;
+                    if (!(other.m_flags & b2Body.e_islandFlag)) {
+                      if (other.IsStatic() === false) {
+                        other.Advance(minTOI);
+                        other.WakeUp();
+                      }
+                      queue[queueSize++] = other;
+                      other.m_flags |= b2Body.e_islandFlag;
+                    }
+                  }
+                }
+              }
+              cn = cn.next;
+            }
+          }
+        }
+        const subStep: b2TimeStep = new b2TimeStep();
+        subStep.dt = (1 - minTOI) * step.dt;
+        subStep.inv_dt = 1 / subStep.dt;
+        subStep.maxIterations = step.maxIterations;
+        island.SolveTOI(subStep);
+        let i: number = 0;
+        while (i < island.m_bodyCount) {
+          b = island.m_bodies[i];
+          b!.m_flags &= ~b2Body.e_islandFlag;
+          if (!(b!.m_flags & (b2Body.e_sleepFlag | b2Body.e_frozenFlag))) {
+            if (!b!.IsStatic()) {
+              const inRange: boolean = b!.SynchronizeShapes();
+              if (inRange === false && this.m_boundaryListener != null) {
+                this.m_boundaryListener.Violation(b!);
+              }
+              let cn: b2ContactEdge | null = b!.m_contactList;
+              while (cn) {
+                cn.contact!.m_flags &= ~b2Contact.e_toiFlag;
+                cn = cn.next;
+              }
+            }
+          }
+          i++;
+        }
+        i = 0;
+        while (i < island.m_contactCount) {
+          const ci: b2Contact = island.m_contacts[i]!;
+          ci.m_flags &= ~(b2Contact.e_toiFlag | b2Contact.e_islandFlag);
+          i++;
+        }
+        this.m_broadPhase.Commit();
+      }
     }
   }
 

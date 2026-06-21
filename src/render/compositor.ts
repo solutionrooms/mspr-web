@@ -103,8 +103,8 @@ export class Compositor {
   private quadCount = 0;
   private curTex: WebGLTexture | null = null;
   private curBlend: BlendMode = "normal";
-  private width: number;
-  private height: number;
+  readonly width: number;
+  readonly height: number;
 
   constructor(gl: WebGL2RenderingContext, width = 640, height = 480) {
     this.gl = gl;
@@ -156,9 +156,11 @@ export class Compositor {
     gl.bindVertexArray(null);
   }
 
-  /** Upload an atlas page image as a STRAIGHT-alpha texture (NEAREST by default —
-   *  cars render with smoothing=false, GameObj.as:910). */
-  createTexture(src: TexImageSource, smooth = false): WebGLTexture {
+  /** Upload an image as a STRAIGHT-alpha texture. NEAREST by default (cars render
+   *  smoothing=false, GameObj.as:910); CLAMP by default — `repeat` enables REPEAT wrap
+   *  for the road surface/edge textures that tile on V (WebGL2 allows NPOT REPEAT, but
+   *  roadtex/sidetex are 256² POT anyway). */
+  createTexture(src: TexImageSource, smooth = false, repeat = false): WebGLTexture {
     const gl = this.gl;
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -166,10 +168,11 @@ export class Compositor {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     const filter = smooth ? gl.LINEAR : gl.NEAREST;
+    const wrap = repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
     return tex;
   }
 
@@ -188,35 +191,67 @@ export class Compositor {
 
   /** Queue one sprite. Flushes first if the texture or blend mode changes. */
   drawSprite(tex: WebGLTexture, frame: AtlasFrame, placement: Omit<SpritePlacement, "w" | "h">, opts: DrawOpts = {}): void {
+    const q = computeQuad({ ...placement, w: frame.w, h: frame.h });
+    // corners [TL,TR,BL,BR] paired with [u0v0, u1v0, u0v1, u1v1]
+    this.drawQuad(
+      tex,
+      [q.x0, q.y0, q.x1, q.y1, q.x2, q.y2, q.x3, q.y3],
+      [frame.u0, frame.v0, frame.u1, frame.v0, frame.u0, frame.v1, frame.u1, frame.v1],
+      opts,
+    );
+  }
+
+  /**
+   * Queue an arbitrary textured quad — explicit screen-space corners + UVs, in the
+   * winding [TL, TR, BL, BR] (matches the static index buffer [0,1,2, 1,3,2]). Used by
+   * the road raster (trapezoid road/edge strips with REPEAT-tiled V). Flushes on
+   * texture/blend change. `pos`/`uv` are 8-length [x0,y0, x1,y1, x2,y2, x3,y3].
+   */
+  drawQuad(tex: WebGLTexture, pos: ArrayLike<number>, uv: ArrayLike<number>, opts: DrawOpts = {}): void {
     const blend = opts.blend ?? "normal";
-    if (
-      this.quadCount > 0 &&
-      (tex !== this.curTex || blend !== this.curBlend || this.quadCount >= MAX_QUADS)
-    ) {
+    if (this.quadCount > 0 && (tex !== this.curTex || blend !== this.curBlend || this.quadCount >= MAX_QUADS)) {
       this.flush();
     }
     this.curTex = tex;
     this.curBlend = blend;
 
-    const q = computeQuad({ ...placement, w: frame.w, h: frame.h });
     const ct = opts.colorTransform ?? IDENTITY_CT;
     const mr = ct.redMultiplier, mg = ct.greenMultiplier, mb = ct.blueMultiplier, ma = ct.alphaMultiplier;
     const or = ct.redOffset / 255, og = ct.greenOffset / 255, ob = ct.blueOffset / 255, oa = ct.alphaOffset / 255;
 
     const base = this.quadCount * VERTS_PER_QUAD * FLOATS_PER_VERT;
     const v = this.verts;
-    const put = (i: number, px: number, py: number, u: number, vv: number) => {
+    for (let i = 0; i < 4; i++) {
       const o = base + i * FLOATS_PER_VERT;
-      v[o] = px; v[o + 1] = py; v[o + 2] = u; v[o + 3] = vv;
+      v[o] = pos[i * 2]; v[o + 1] = pos[i * 2 + 1]; v[o + 2] = uv[i * 2]; v[o + 3] = uv[i * 2 + 1];
       v[o + 4] = mr; v[o + 5] = mg; v[o + 6] = mb; v[o + 7] = ma;
       v[o + 8] = or; v[o + 9] = og; v[o + 10] = ob; v[o + 11] = oa;
-    };
-    // corners [TL,TR,BL,BR] paired with [u0v0, u1v0, u0v1, u1v1]
-    put(0, q.x0, q.y0, frame.u0, frame.v0);
-    put(1, q.x1, q.y1, frame.u1, frame.v0);
-    put(2, q.x2, q.y2, frame.u0, frame.v1);
-    put(3, q.x3, q.y3, frame.u1, frame.v1);
+    }
     this.quadCount++;
+  }
+
+  /** Queue a flat-colour quad (sky/ground bands). Uses a 1×1 white texel × vertex
+   *  colour: pass the colour as the ColorTransform offset with a zero multiplier. */
+  drawSolidQuad(pos: ArrayLike<number>, rgba: [number, number, number, number]): void {
+    if (!this.whiteTex) this.whiteTex = this.makeWhiteTex();
+    this.drawQuad(this.whiteTex, pos, [0, 0, 1, 0, 0, 1, 1, 1], {
+      blend: "normal",
+      colorTransform: {
+        redMultiplier: 0, greenMultiplier: 0, blueMultiplier: 0, alphaMultiplier: 0,
+        redOffset: rgba[0] * 255, greenOffset: rgba[1] * 255, blueOffset: rgba[2] * 255, alphaOffset: rgba[3] * 255,
+      },
+    });
+  }
+
+  private whiteTex: WebGLTexture | null = null;
+  private makeWhiteTex(): WebGLTexture {
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    return tex;
   }
 
   private applyBlend(): void {

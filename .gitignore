@@ -35,5 +35,10 @@ src/render/assets/
 # render-spike outputs (SWF-derived art: webgl/ruffle/diff/sidebyside PNGs)
 tools/render-spike/out/
 
+# road-geometry golden = derived level data (the COAST track shape captured from the SWF);
+# same category as data/. Regenerate via `npm run oracle:capture:roadsegs`. The physics
+# goldens (m*/a0) are pure simulation traces, not content, so they stay committed.
+test/goldens/road-coast.json
+
 # generated web assets
 public/assets/

@@ -209,9 +209,45 @@ export class b2Island {
     }
   }
 
-  // b2Island.as:238-277 — TOI sub-step solve. Ported at m7 (CCD/TOI).
-  public SolveTOI(_subStep: b2TimeStep): void {
-    notPorted("b2Island.SolveTOI (m7: CCD/TOI)");
+  // b2Island.as:238-277 — TOI sub-step solve. NO gravity integration and NO
+  // warm-start/InitVelocityConstraints (unlike Solve): just resolve velocity
+  // constraints, advance positions for the sub-step, position-correct with the
+  // TOI Baumgarte (0.75), then report.
+  public SolveTOI(subStep: b2TimeStep): void {
+    const contactSolver: b2ContactSolver = new b2ContactSolver(
+      subStep,
+      this.m_contacts as b2Contact[],
+      this.m_contactCount,
+      this.m_allocator,
+    );
+    let i = 0;
+    while (i < subStep.maxIterations) {
+      contactSolver.SolveVelocityConstraints();
+      i++;
+    }
+    i = 0;
+    while (i < this.m_bodyCount) {
+      const b: b2Body = this.m_bodies[i]!;
+      if (!b.IsStatic()) {
+        b.m_sweep.c0.SetV(b.m_sweep.c);
+        b.m_sweep.a0 = b.m_sweep.a;
+        b.m_sweep.c.x += subStep.dt * b.m_linearVelocity.x;
+        b.m_sweep.c.y += subStep.dt * b.m_linearVelocity.y;
+        b.m_sweep.a += subStep.dt * b.m_angularVelocity;
+        b.SynchronizeTransform();
+      }
+      i++;
+    }
+    const k_toiBaumgarte: number = 0.75;
+    i = 0;
+    while (i < subStep.maxIterations) {
+      const contactsOkay: boolean = contactSolver.SolvePositionConstraints(k_toiBaumgarte);
+      if (contactsOkay) {
+        break;
+      }
+      i++;
+    }
+    this.Report(contactSolver.m_constraints);
   }
 
   // b2Island.as:279-330 — contact-result reporting to the listener.

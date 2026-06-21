@@ -18,7 +18,17 @@
 | Document class | **`Preloader`** (← harness `-replace` target, as FZ3). It shows a cpmstar ad then `new Main()`; `Main` never constructs headless (the ad callback never fires), so the harness replaces `Preloader`. |
 | Developer | MS Paint Racers (sponsored portal release; CPMStar / AddictingGames / Mochi) |
 
-## Physics engine — **Box2DFlash 2.0.2** (BYTE-IDENTICAL to FZ3)
+## Physics engine — **Box2DFlash 2.0.2** (BYTE-IDENTICAL to FZ3) — but VESTIGIAL in the ship
+
+> **⚠ CORRECTION 2026-06-21:** Box2D is **never simulated in the shipped game.** `b2World.Step`
+> is called only in `UpdateGameplay_Garage` (Game.as:2232-2233), which has **zero callers**; the
+> shipped tick `Main.RunLevel → Game.UpdateGameplay` (race loop, Game.as:1998) never steps the
+> world, and no shipped physobj def even creates a body. **Gameplay is a pure arcade pseudo-3D
+> integrator** (`GameObj.UpdatePlayer`: `zpos += zvel` in track-space; `CarCollision`/`Collision`
+> resolve in `xpos/zpos`). Box2D is dead FZ3 lineage, like the dead `s3d.as` renderer. The
+> bit-exact target is the arcade engine — see `CLAUDE.md`. The Box2D facts below remain accurate
+> *as a description of the embedded-but-unused engine* (kept for FZ3 parity + the live demo).
+
 74 `.as` files under `extracted/scripts/Box2D/`. Verified (aggregate MD5) **byte-for-byte
 identical** to Flaming Zombooka 3's Box2D — same decompile of the same shipped engine.
 **Consequence: FZ3's bit-exact TypeScript port lifts 1:1; no re-porting of the engine.**
@@ -38,14 +48,17 @@ allowSleep        : true
 ```
 Joints used: revolute, prismatic, pulley, distance, mouse. Custom `ContactListener`.
 
-### The step cadence (`Game.as`) — **2× substeps per frame** (same pattern as FZ3)
+### The step cadence (`Game.as`) — **DEAD CODE** (garage-only, zero callers)
 ```as3
+// Game.UpdateGameplay_Garage (Game.as:2232) — NEVER CALLED in the shipped game:
 PhysicsBase.world.Step(PhysicsBase.physStep, PhysicsBase.physNumIterations);  // step 1
 PhysicsBase.world.Step(PhysicsBase.physStep, PhysicsBase.physNumIterations);  // step 2
 GameObjects.UpdateGOsFromPhysics();
 ```
-Two back-to-back `1/80` steps per gameplay update (e.g. `UpdateGameplay_Garage`, and the
-in-race update). Reproduce the count, order, and the per-state gating EXACTLY.
+These are the ONLY `world.Step` lines in the codebase, and `UpdateGameplay_Garage` has no callers.
+**The live race loop `Game.UpdateGameplay` (Game.as:1998) steps Box2D zero times** — it runs
+`UpdateControl → GameObjects.Update → KillObjects → DoAddList → CarCollision → camera-follow` at
+50 fps (single update/frame). The arcade integrator, not Box2D, is what to reproduce exactly.
 
 ### Game-physics wrappers (mspr-specific — port fresh, FZ3 has close templates)
 `PhysicsBase.as` (397 LOC, the ONLY Box2D adapter — differs from FZ3's by ~52 lines),
