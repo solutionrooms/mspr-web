@@ -1,33 +1,29 @@
 /**
- * mspr render-state contract  (game → render)  — v1 (provisional; render dev refines)
- * Owner: game developer. Derived from DisplayObjFrame.as (RenderAtRotScaled* paths),
- * Game.as (Render + the layer composite), Camera.as, and the road renderer
- * (EditorPackage/RoadEditor/Road.as → RoadRender).
+ * mspr render-state contract — v2 (LOCKED, game ↔ render co-design)  — the live contract.
+ * Owner: game produces one RenderFrame per displayed frame; render draws it.
  *
- * SEPARATION OF CONCERNS
- *   The game dev produces one `RenderFrame` per displayed frame from game state. The
- *   render dev consumes it and draws with a custom WebGL2 2D compositor. Rendering is
- *   NOT bound by the Prime Directive (visual, not physics) — but match these
- *   conventions so it looks identical to the original.
+ * WHY v2 (replaces the v1 flat-layer model): the shipped Game.Render (Game.as:2371) is NOT
+ * a back-to-front composite of ~7 named BitmapData layers. It is pseudo-3D:
+ *   1. ONE accumulation buffer.
+ *   2. The ROAD RENDERER is the primary compositor — RoadRender.AddGameObjects
+ *      (RoadRender.as:700) depth-sorts every is3DObject GameObj by track-Z (zpos),
+ *      perspective-projects it (scale = fov/(1+z)) and draws it INTERLEAVED with the road
+ *      segments. Cars / pickups / debris are ONE pseudo-3D pass in TRACK coords.
+ *   3. Screen-space passes onto the same buffer: RenderOverlayStuff → Particles → Dash →
+ *      Lensflare (Game.as:2429-2432).
+ *   4. Full-screen post: tilt + screen-shake + 1.1x zoom (Game.as:2437-2444) + turbo nitro
+ *      ColorTransform (2449).
+ *   5. HUD: Weather overlay, bend arrows, panel (2452-2455).
  *
- * ⚠ THE RENDERING REALITY (read CLAUDE.md "The rendering reality" first)
- *   The shipped game renders in SOFTWARE: Game.Render composites ~7 BitmapData layers
- *   (background / scroll / shadow / road / particle / foreground / hud), and each
- *   sprite is blitted by DisplayObjFrame.RenderAtRotScaled* with a registration
- *   offset, rotation, scale, x-flip, full ColorTransform, and a blend mode. The Stage3D
- *   `s3d` batcher is DEAD CODE in the shipped SWF — use it only as the design
- *   reference for the WebGL batcher, NOT as the source of visual semantics.
+ * OWNERSHIP:
+ *   - RENDER owns RoadRender end-to-end: the static RoadSeg geometry (built once per level
+ *     from level road.blocks + roaddata + road_* vars), the projection (BuildDrawSegs), the
+ *     road-strip raster, and per-object perspective placement → compositor.drawSprite.
+ *   - GAME supplies, per frame: the camera (x,y,z), the is3DObject list in TRACK coords, the
+ *     screen-space overlay/HUD list, the post-process state, and the background state.
  *
- * COORDINATE / TRANSFORM CONVENTIONS  (must match the AS3 exactly)
- *   - Stage is 640×480 (Defs.displayarea_w/h), origin top-left, y-DOWN.
- *   - World→screen: the camera offset is baked in on the CPU (Camera.x/y subtracted
- *     from world coords) — the renderer receives screen-space pixel coords. Confirm
- *     pixel-snapping (round()) against GameObj/DisplayObjFrame before relying on it.
- *   - dir is RADIANS. frame is 0-BASED (the timeline frame is frame+1).
- *   - xoff/yoff are the sprite's registration/anchor offset (see caroffsets.json for
- *     cars; DisplayObjFrame.xoffset/yoffset otherwise) — applied before rotate/scale.
- *   - Draw order: per-layer, then by zpos within a layer. Confirm sort direction
- *     against Game.Render / GameObjects ordering.
+ * Rendering is NOT bound by the Prime Directive (visual, not physics) — the fixed 2×(1/80)
+ * sim loop owns determinism; render reads the emitted frame.
  */
 
 export interface ColorTransformLike {
@@ -41,108 +37,132 @@ export interface ColorTransformLike {
   alphaOffset: number;
 }
 
-/** ⚠ UNDER REVISION (RenderFrame v2 — see DEVELOPER_MESSAGES "road renderer IS the sprite
- *  compositor"). Render's Game.Render audit found mspr is pseudo-3D: most objects are
- *  TRACK-space and drawn by RoadRender's perspective depth-pass interleaved with road
- *  segments — NOT a back-to-front composite of flat named layers. This 7-value enum +
- *  "group by layer, sort by zpos" holds only for the true overlays/HUD. The 3D-object vs
- *  overlay split + RoadState are ONE design, co-designed with render before RoadRender lands.
- *  The compositor layers, back-to-front (legacy v1 model): */
-export type RenderLayer =
-  | "background"
-  | "scroll"
-  | "shadow"
-  | "road"
-  | "particle"
-  | "foreground"
-  | "hud";
+/** Flash blend modes actually used: 'normal' (whole GameObj_Base path) + 'add' (effects).
+ *  layer/overlay confirmed dead (no callers) — dropped from the union. */
+export type BlendMode = "normal" | "add";
 
-/** Flash blend modes used by DisplayObjFrame (RenderAtRotScaled* variants).
- *  'normal' = alpha-over (the whole GameObj_Base render path), 'add' = additive
- *  (effects/particles). 'layer'/'overlay' are kept in the union for completeness but
- *  have NO active callers in the shipped game's render path and no data config selecting
- *  them (verified: GameObj_Base uses only RenderAtRotScaled[_Xflip]; the Layer/Overlay
- *  wrappers in DisplayObj.as are dead pass-throughs). DEPRIORITISE them — build
- *  normal+add first; flag if a real caller ever surfaces. (Answer to render Q#4.) */
-export type BlendMode = "normal" | "add" | "layer" | "overlay";
-
-/**
- * A car is NOT one sprite — it renders as a STACK of DisplayObj layers
- * (car_dobj_layer0 / _shadow / _1 / _color / _2 / _headlights; GameObj.as:1241-1260),
- * with the per-player recolour `carCT = ColorTransform(1,1,1,1, r-255,g-255,b-255, 0)`
- * applied ONLY to the `_color` layer (GameObj.as:3246) and a fixed
- * `shadowCT(1,1,1,1, -255,-255,-255,-128)` on `_shadow`. CONFIRMED: the game emits ONE
- * RenderObj per layer (each its own `clip` + `colorTransform` + `zpos`); the renderer
- * just draws the list. Render owns adding the `car_dobj_layer_*` clips to the atlas.
- */
-export interface RenderObj {
-  /** Sprite/symbol identity in the asset atlas = the SWF SymbolClass/linkage name
-   *  (CONFIRMED: matches physobjs[].graphics[].clip, roaddata billboard `.mc`,
-   *  caroffsets[].mcname). For cars, the per-layer clip (e.g. `car_dobj_layer_color`). */
+/* ───────────────────────── 3D (track-space) objects ──────────────────────────
+ * A GameObj with is3DObject. The renderer finds its road segment from zpos, applies the
+ * segment's perspective scale = fov/(1+z) (RoadRender.AddGameObjects:724-770), and draws it
+ * with compositor.drawSprite. Positions are TRACK coords, NOT screen pixels. */
+export interface Object3D {
+  /** SWF clip/linkage name (atlas key). Cars = "Cars" (the layer-stack is dead). */
   clip: string;
-  /** 0-based timeline frame within the clip. */
+  /** 0-based frame within the clip (car model frame, animation frame, …). */
   frame: number;
-  /** Screen-space position (px), camera already applied. */
-  x: number;
-  y: number;
-  /** Registration/anchor offset (px), applied before rotate/scale. OPTIONAL: the atlas
-   *  owns pivots per (clip,frame) — omit and the renderer uses the atlas pivot (cars:
-   *  caroffsets (xoff,yoff); others: DefineSprite registration). Only set to OVERRIDE. */
+  /** Lateral offset from road centre, world units (RoadObj.xpos; +right). */
+  xpos: number;
+  /** Along-track distance, world units (GameObj.zpos). Renderer maps to a segment. */
+  zpos: number;
+  /** Height above the road surface, world units (0 = on road). Default 0. */
+  ypos?: number;
+  /** Rotation in RADIANS (Flash convention; +cw on the y-down stage). */
+  dir: number;
+  /** Per-object scale, MULTIPLIED by the segment's perspective scale. */
+  scale: number;
+  /** Horizontal flip (mirrors sprite + rotation — RenderAtRotScaled_Xflip). */
+  xflip: boolean;
+  /** zpos wraps modulo lap length (RoadRender.AddGameObjects:731). Default false. */
+  useLapForRender?: boolean;
+  /** Use ypos as absolute screen Y rather than road-relative (RoadObj.useAbsoluteYpos). */
+  useAbsoluteYpos?: boolean;
+  /** Pivot override; default = atlas pivot for (clip,frame) (cars: caroffsets). */
   xoff?: number;
   yoff?: number;
-  /** Rotation in RADIANS. */
-  dir: number;
-  /** Uniform scale. */
-  scale: number;
-  /** Horizontal flip (negates X AFTER rotation — RenderAtRotScaled_Xflip). */
-  xflip: boolean;
-  /** Which compositor layer this draws into. */
-  layer: RenderLayer;
-  /** Draw-order key within the layer. */
-  zpos: number;
-  /** 0..1 (equals colorTransform.alphaMultiplier when a CT is present). */
-  alpha: number;
-  /** Full recolour (mult + offset). IGNORED when blend==='add' — the additive path
-   *  passes CT=null (DisplayObjFrame.as:346), so the game must not rely on tint+add. */
+  /** IGNORED when blend==='add' (DisplayObjFrame.as:346). */
   colorTransform?: ColorTransformLike;
-  /** NEAREST (false, the default — GameObj_Base.renderSmooth=false) vs LINEAR sampling;
-   *  per-object (DisplayObjFrame param7). (Added per render Q#3.) */
+  /** Default false = NEAREST (GameObj_Base.renderSmooth). */
   smooth?: boolean;
   /** Default 'normal'. */
   blend?: BlendMode;
 }
 
-/**
- * The pseudo-3D road is NOT sprite-based — it is a procedural segment renderer
- * (RoadRender) that projects the road layout (data/levels.json `road.blocks` +
- * data/roaddata.json surfaces/edges + data/vars.json road_* constants) into screen
- * strips. The render dev reproduces RoadRender; the game dev supplies the camera-
- * along-track state it needs. This shape is a placeholder — co-design before building.
- */
-export interface RoadState {
-  /** Distance of the camera along the track (world Z). */
-  cameraZ: number;
-  /** Player/camera lateral offset and look direction (curve accumulation). */
-  cameraX: number;
-  /** OPEN: the render dev will pull most road geometry directly from the level +
-   *  roaddata + vars; this carries only the per-frame camera/dynamic state. */
-  [k: string]: unknown;
-}
-
-export interface Camera {
-  /** World-space top-left the 2D camera is scrolled to (px). */
+/* ────────────────────────── screen-space overlays ────────────────────────────
+ * Drawn after the road+3D pass: RenderOverlayStuff, Particles, Dash, Lensflare
+ * (Game.as:2429-2432). Pre-projected screen pixels (camera already baked). Maps onto
+ * compositor.drawSprite directly. */
+export interface OverlayObj {
+  clip: string;
+  frame: number;
+  /** Screen-space px (top-left origin, y-down). */
   x: number;
   y: number;
-  /** Zoom; usually 1. */
+  dir: number;
   scale: number;
+  xflip: boolean;
+  xoff?: number;
+  yoff?: number;
+  colorTransform?: ColorTransformLike;
+  smooth?: boolean;
+  blend?: BlendMode;
+  /** Drawn in the HUD pass (after the post-process) vs the pre-post overlay pass. */
+  afterPost?: boolean;
 }
 
+/* ──────────────────────────────── road ───────────────────────────────────────
+ * Per-frame camera + dynamic road state. Static segment geometry is owned by the renderer
+ * (built from the level). SetCameraPos(x,y,z) inputs (RoadRender.as:77; renderer NEGATES
+ * lateral internally — pass the raw follow-cam lateral). */
+export interface RoadState {
+  /** Camera lateral position along the track (renderXPos). */
+  cameraX: number;
+  /** Camera vertical / height (renderYPos). */
+  cameraY: number;
+  /** Camera distance along track (renderZPos). FRACTIONAL → smooth sub-segment scroll. */
+  cameraZ: number;
+  /** Surface set / weather variant index if it changes mid-race (optional; mostly static). */
+  surfaceVariant?: number;
+}
+
+/* ──────────────────────────── background ──────────────────────────────────────
+ * RoadRender_BitmapLine.Render() draws a parallax "bg" clip + solid sky/ground bands
+ * behind the road (lines 58-89). */
+export interface BackgroundState {
+  /** "bg" clip + 0-based frame (GameVars.currentBackgroundFrame-1). */
+  clip: string;
+  frame: number;
+  /** Horizontal parallax offset (GameVars.playerRot). */
+  parallaxX: number;
+  /** Vertical placement (playeryBackgroundYpos + horizonY + clip yOffset). */
+  yPos: number;
+  /** Sky / ground solid-fill colours (ARGB) for the bands above/below the bg bitmap. */
+  skyColor: number;
+  groundColor: number;
+}
+
+/* ──────────────────────────── post-process ────────────────────────────────────
+ * Full-screen pass when copying the scene buffer to the display (Game.as:2437-2451). */
+export interface ScreenPost {
+  /** Screen tilt + shake rotation, radians (Dash.GetScreenTilt + screenShakeRot). */
+  tiltRot: number;
+  shakeX: number;
+  shakeY: number;
+  /** Extra zoom on top of the fixed 1.1x (screenShakeScale). */
+  shakeScale: number;
+  steadyCamX: number;
+  steadyCamY: number;
+  /** Full-screen ColorTransform when turbo/nitro is active (nitro_blur_* vars, 2449). */
+  turboCT?: ColorTransformLike;
+}
+
+/* ──────────────────────────────── the frame ───────────────────────────────────*/
 export interface RenderFrame {
-  /** Active && visible sprite objects. Render groups by `layer`, then sorts by zpos. */
-  objects: RenderObj[];
-  /** Procedural road layer state (drawn into the 'road' layer). */
+  background: BackgroundState;
   road: RoadState;
-  camera: Camera;
-  /** Fixed stage; letterbox into the window. */
+  /** is3DObject gameplay objects in TRACK coords; renderer perspective-projects + depth-
+   *  sorts them with the road segments (one pass). */
+  objects3D: Object3D[];
+  /** Screen-space overlays/HUD (dash, lensflare, particles already-projected, panel). */
+  overlays: OverlayObj[];
+  /** Full-screen post; omit for no shake/tilt/turbo. */
+  post?: ScreenPost;
   stage: { width: 640; height: 480 };
+}
+
+/** Game-internal 2D camera (used to bake overlay screen coords). NOT part of RenderFrame —
+ *  the 3D camera is RoadState; overlays arrive pre-baked. */
+export interface Camera {
+  x: number;
+  y: number;
+  scale: number;
 }

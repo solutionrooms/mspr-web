@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "swf": "tools/oracle/build/harness-a0-coast.swf",
+    "fields": [
+      "px",
+      "py",
+      "a",
+      "vx",
+      "vy",
+      "w"
+    ],
+    "tags": {},
+    "oracle": "Ruffle (selfhosted) headless via puppeteer"
+  },
+  "golden": {}
+}

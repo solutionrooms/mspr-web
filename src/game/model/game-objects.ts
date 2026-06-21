@@ -6,7 +6,14 @@ import type { b2World } from "../../box2d/Dynamics/b2World";
 import { GameObj } from "./game-obj";
 import { PhysObjBodyUserData } from "./body-user-data";
 import { PhysicsBase } from "../physics-base";
-import type { RenderFrame, RenderObj, Camera } from "../../../contracts/render-state";
+import type {
+  RenderFrame,
+  Object3D,
+  OverlayObj,
+  RoadState,
+  BackgroundState,
+  ScreenPost,
+} from "../../../contracts/render-state";
 
 type AddEntry = { fn: (o: unknown) => void; o: unknown };
 
@@ -52,9 +59,11 @@ export class GameObjects {
     for (const go of killed) go.removeFunction?.(go);
   }
 
-  /** GameObjects.UpdateGOsFromPhysics — walk world.GetBodyList(), map each body to its
-   *  GameObj via PhysObjBodyUserData.gameObjectIndex, and run its per-type writeback
-   *  (which sets xpos/ypos = body world × p2w, dir = body angle). */
+  /** ⚠ VESTIGIAL (physobj-prop path only). Cars are arcade and set xpos/ypos/zpos themselves
+   *  in their update function — they have NO Box2D body. This readback is called in the shipped
+   *  game ONLY by the dead garage loop (Game.UpdateGameplay_Garage), so the RACE loop never runs
+   *  it. Kept for the unused physobj path + the live Box2D demo. Cite: GameObjects.UpdateGOsFromPhysics.
+   *  Walk world.GetBodyList(), map each body→GameObj via gameObjectIndex, run its writeback. */
   updateGOsFromPhysics(world: b2World): void {
     let b = world.GetBodyList();
     while (b) {
@@ -67,34 +76,50 @@ export class GameObjects {
     }
   }
 
-  /** Build the RenderFrame the renderer draws: active && visible objects, with the
-   *  camera baked into screen coords (xpos − camera.x — RenderDispObjNormally).
-   *  ⚠ PROVISIONAL (RenderFrame v1): render's Game.Render audit found mspr is pseudo-3D —
-   *  most objects are TRACK-space (xpos lateral + zpos along-track + is3DObject), drawn by
-   *  RoadRender's perspective depth-pass, not flat screen layers. This emission is replaced
-   *  in the RenderFrame-v2 / RoadState co-design with render. The spine above (cadence,
-   *  writeback, kill/add) is unaffected; only this output shape changes. */
-  emitRenderFrame(camera: Camera, road: RenderFrame["road"]): RenderFrame {
-    const objects: RenderObj[] = [];
+  /** Build the RenderFrame v2 (LOCKED contract): split active && visible GameObjs by
+   *  is3DObject into the TRACK-space objects3D list (RoadRender perspective-projects +
+   *  depth-sorts them with the road segments) and the SCREEN-space overlays list.
+   *  background / road camera / post come from the game (Game.render). Particles / Dash /
+   *  Lensflare are SEPARATE overlay sources (not GameObjs) added by the renderer or fed
+   *  later. Cite: RoadRender.AddGameObjects (is3DObject discriminator) + Game.Render. */
+  emitRenderFrame(road: RoadState, background: BackgroundState, post?: ScreenPost): RenderFrame {
+    const objects3D: Object3D[] = [];
+    const overlays: OverlayObj[] = [];
     for (const go of this.objs) {
       if (!go.active || !go.visible) continue;
-      objects.push({
-        clip: go.clip,
-        frame: go.frame,
-        x: go.xpos - camera.x,
-        y: go.ypos - camera.y,
-        dir: go.dir,
-        scale: go.scale,
-        xflip: go.xflip,
-        layer: go.layer,
-        zpos: go.zpos,
-        alpha: go.alpha,
-        colorTransform: go.colorTransform,
-        smooth: go.smooth,
-        blend: go.blend,
-      });
+      if (go.is3DObject) {
+        objects3D.push({
+          clip: go.clip,
+          frame: go.frame,
+          xpos: go.xpos, // lateral
+          zpos: go.zpos, // along-track
+          ypos: go.ypos, // height above road
+          dir: go.dir,
+          scale: go.scale,
+          xflip: go.xflip,
+          useLapForRender: go.useLapForRender,
+          useAbsoluteYpos: go.useAbsoluteYpos,
+          colorTransform: go.colorTransform,
+          smooth: go.smooth,
+          blend: go.blend,
+        });
+      } else {
+        overlays.push({
+          clip: go.clip,
+          frame: go.frame,
+          x: go.xpos, // screen px (camera baked game-side)
+          y: go.ypos,
+          dir: go.dir,
+          scale: go.scale,
+          xflip: go.xflip,
+          colorTransform: go.colorTransform,
+          smooth: go.smooth,
+          blend: go.blend,
+          afterPost: go.afterPost,
+        });
+      }
     }
-    return { objects, road, camera, stage: { width: 640, height: 480 } };
+    return { background, road, objects3D, overlays, post, stage: { width: 640, height: 480 } };
   }
 
   /** Convenience: write a body's transform to a GameObj in pixels (the common writeback). */

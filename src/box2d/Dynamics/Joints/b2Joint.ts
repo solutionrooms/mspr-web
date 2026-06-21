@@ -1,14 +1,13 @@
-// SCAFFOLD until m6 (joints). Full b2Joint.as (+ the six joint subclasses) is ported
-// at the joints milestone. The static type constants are REAL (b2World.DrawJoint reads
-// them) and the instance fields match the original so b2World's island assembly and
-// CreateJoint/DestroyJoint type-check. The freefall goldens create no joint, so no
-// method below runs.
-import type { b2Body } from "../b2Body";
-import type { b2JointDef } from "./b2JointDef";
-import type { b2TimeStep } from "../b2TimeStep";
+// Port of Box2D/Dynamics/Joints/b2Joint.as (Box2DFlash 2.0.2), line-by-line.
+// Base joint: type tags, the create-factory dispatch (via _jointFactory registry),
+// the node/body links, and the virtual constraint hooks overridden by each subclass.
+// Op order preserved.
 import type { b2Vec2 } from "../../Common/Math/b2Vec2";
+import type { b2Body } from "../b2Body";
+import type { b2TimeStep } from "../b2TimeStep";
 import { b2JointEdge } from "./b2JointEdge";
-import { notPorted } from "../../_internal/notPorted";
+import type { b2JointDef } from "./b2JointDef";
+import { createJointByType } from "./_jointFactory";
 
 export class b2Joint {
   // b2Joint.as:10-30 (exact)
@@ -36,28 +35,63 @@ export class b2Joint {
   public m_collideConnected!: boolean;
   public m_userData: unknown;
 
-  public static Create(_def: b2JointDef, _allocator: unknown): b2Joint {
-    return notPorted("b2Joint.Create (m6: joints)");
+  // b2Joint.as:54-65
+  constructor(def: b2JointDef) {
+    this.m_type = def.type;
+    this.m_prev = null;
+    this.m_next = null;
+    this.m_body1 = def.body1!;
+    this.m_body2 = def.body2!;
+    this.m_collideConnected = def.collideConnected;
+    this.m_islandFlag = false;
+    this.m_userData = def.userData;
   }
-  public static Destroy(_joint: b2Joint, _allocator: unknown): void {
-    notPorted("b2Joint.Destroy (m6: joints)");
+
+  // b2Joint.as:67-91 (factory dispatch via the registry — see _jointFactory.ts)
+  public static Create(def: b2JointDef, _allocator: unknown): b2Joint {
+    return createJointByType(def.type, def) as b2Joint;
   }
-  public InitVelocityConstraints(_step: b2TimeStep): void {
-    notPorted("b2Joint.InitVelocityConstraints (m6: joints)");
-  }
-  public SolveVelocityConstraints(_step: b2TimeStep): void {
-    notPorted("b2Joint.SolveVelocityConstraints (m6: joints)");
-  }
-  public InitPositionConstraints(): void {
-    notPorted("b2Joint.InitPositionConstraints (m6: joints)");
-  }
-  public SolvePositionConstraints(): boolean {
-    return notPorted("b2Joint.SolvePositionConstraints (m6: joints)");
+
+  // b2Joint.as:93-95
+  public static Destroy(_joint: b2Joint, _allocator: unknown): void {}
+
+  // b2Joint.as:97-145
+  public GetType(): number {
+    return this.m_type;
   }
   public GetAnchor1(): b2Vec2 {
-    return notPorted("b2Joint.GetAnchor1 (m6: joints)");
+    return null as unknown as b2Vec2;
   }
   public GetAnchor2(): b2Vec2 {
-    return notPorted("b2Joint.GetAnchor2 (m6: joints)");
+    return null as unknown as b2Vec2;
+  }
+  public GetReactionForce(): b2Vec2 {
+    return null as unknown as b2Vec2;
+  }
+  public GetReactionTorque(): number {
+    return 0;
+  }
+  public GetBody1(): b2Body {
+    return this.m_body1;
+  }
+  public GetBody2(): b2Body {
+    return this.m_body2;
+  }
+  public GetNext(): b2Joint | null {
+    return this.m_next;
+  }
+  public GetUserData(): unknown {
+    return this.m_userData;
+  }
+  public SetUserData(data: unknown): void {
+    this.m_userData = data;
+  }
+
+  // b2Joint.as:147-162 (virtual — overridden by subclasses)
+  public InitVelocityConstraints(_step: b2TimeStep): void {}
+  public SolveVelocityConstraints(_step: b2TimeStep): void {}
+  public InitPositionConstraints(): void {}
+  public SolvePositionConstraints(): boolean {
+    return false;
   }
 }

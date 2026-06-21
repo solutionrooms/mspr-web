@@ -23,3 +23,20 @@ export { b2BodyDef } from "./Dynamics/b2BodyDef";
 export { b2TimeStep } from "./Dynamics/b2TimeStep";
 export { b2ContactListener } from "./Dynamics/b2ContactListener";
 export { b2ContactFilter } from "./Dynamics/b2ContactFilter";
+
+// Joints (m6) — FZ3 uses revolute/prismatic/distance/mouse; pulley/gear ported for
+// completeness. CreateJoint via b2World.CreateJoint(def).
+export { b2Joint } from "./Dynamics/Joints/b2Joint";
+export { b2JointDef } from "./Dynamics/Joints/b2JointDef";
+export { b2RevoluteJoint } from "./Dynamics/Joints/b2RevoluteJoint";
+export { b2RevoluteJointDef } from "./Dynamics/Joints/b2RevoluteJointDef";
+export { b2PrismaticJoint } from "./Dynamics/Joints/b2PrismaticJoint";
+export { b2PrismaticJointDef } from "./Dynamics/Joints/b2PrismaticJointDef";
+export { b2DistanceJoint } from "./Dynamics/Joints/b2DistanceJoint";
+export { b2DistanceJointDef } from "./Dynamics/Joints/b2DistanceJointDef";
+export { b2MouseJoint } from "./Dynamics/Joints/b2MouseJoint";
+export { b2MouseJointDef } from "./Dynamics/Joints/b2MouseJointDef";
+export { b2PulleyJoint } from "./Dynamics/Joints/b2PulleyJoint";
+export { b2PulleyJointDef } from "./Dynamics/Joints/b2PulleyJointDef";
+export { b2GearJoint } from "./Dynamics/Joints/b2GearJoint";
+export { b2GearJointDef } from "./Dynamics/Joints/b2GearJointDef";
